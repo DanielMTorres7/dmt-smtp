@@ -34,7 +34,7 @@ class Email:
         """
         Configura o MIME para o envio do e-mail.
         """
-        self._logger.info(f"Preparando e-mail para: {self.recipients} com anexo: {self.file_path}")
+        self._logger.info(f"Preparando e-mail \"{self.subject}\" para: {self.recipients} com anexo: {self.file_path}")
 
         mime = CustomMIMEMultipart()
         mime['To'] = self.recipients[0]

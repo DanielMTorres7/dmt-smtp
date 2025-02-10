@@ -1,12 +1,12 @@
 [project]
 name = "dmt-smtp"
-version = "0.1.0"
+version = "0.1.16"
 description = ""
 authors = [
     {name = "Daniel",email = "daniel.mtorres7@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.1"
 dependencies = [
 ]
 

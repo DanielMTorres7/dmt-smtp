@@ -5,27 +5,30 @@ import time
 from .utils import setup_logger
 from .email import Email
 from .models import SMTPResponse
+import logging
 
 class EmailSender:
     """
-    Classe para envio de e-mails utilizando SMTP.
-    args:
-        url: str - URL do servidor SMTP
-        port: int - Porta do servidor SMTP
-        login: str - E-mail de login
-        password: str - Senha de login
-        log_path: str - Caminho para o arquivo de log
-    Para enviar e-mails, utilize o método `send`.
+    Classe para envio de e-mails utilizando SMTP.\n
+    :param url: str - URL do servidor SMTP\n
+    :param port: int - Porta do servidor SMTP\n
+    :param login: str - E-mail de login\n
+    :param password: str - Senha do e-mail\n
+    :param logger: logging.Logger - Logger personalizado (default: Console)\n
+    :param signature_path: str - Caminho para o arquivo de assinatura (default: None)\n
+    Para enviar e-mails, utilize o método `send`.\n
     Após o uso, é recomendado fechar a conexão com o servidor SMTP e IMAP utilizando o método `close_connection`.
     """
-    def __init__(self, url: str, port: int, login: str, password: str, log_path: str = ""):
-        self.logger = setup_logger(log_path)
+    def __init__(self, url: str, port: int, login: str, password: str, logger: logging.Logger = None, signature_path: Optional[str] = None):
+        self.logger = setup_logger(logger)
         self.url = url
-        self.port = port
+        self.port = int(port)
         self.login = login
         self.password = password
+        self.signature_path = signature_path
         self.server: smtplib.SMTP | smtplib.SMTP_SSL = self._connect_smtp()
         self.imap : imaplib.IMAP4_SSL = self._connect_imap()
+        self.logger.info(f"Usando o email: {self.login}")
         
 
     def _connect_imap(self):
@@ -33,7 +36,8 @@ class EmailSender:
         Conecta ao servidor IMAP para salvar os e-mails enviados.
         """
         try:
-            imap = imaplib.IMAP4_SSL(self.url, 993)
+            imap_url = self.url.replace("smtp", "imap")
+            imap = imaplib.IMAP4_SSL(imap_url, 993)
             imap.login(self.login, self.password)
             self.logger.info("Conectado ao servidor IMAP com sucesso.")
             return imap
@@ -56,7 +60,6 @@ class EmailSender:
 
             server.login(self.login, self.password)
             self.logger.info("Conectado ao servidor SMTP com sucesso.")
-            self.logger.info(f"Usando o email: {self.login}")
             return server
 
         except (smtplib.SMTPException, ValueError) as e:
@@ -92,33 +95,36 @@ class EmailSender:
     
 
     def send(self, subject: str, body: str, to_email: str, cc_emails: Optional[str] = None, file_path: Optional[str] = None) -> SMTPResponse:
+        """Envia um e-mail.
+
+        Args:
+            subject: O assunto do e-mail.
+            body: O corpo do e-mail.
+            to: O endereço de e-mail do destinatário principal.
+            cc: Uma string contendo endereços de e-mail em cópia, separados por vírgula (opcional).
+            attachment: O caminho para o arquivo a ser anexado ao e-mail (opcional).
+
+        Returns:
+            Um objeto SMTPResponse contendo informações sobre o resultado do envio.  Este objeto possui os seguintes atributos:
+                success (bool): True se o e-mail foi enviado com sucesso, False caso contrário.
+                subject (str): O assunto do e-mail.
+                body (str): O corpo do e-mail.
+                to (str): O endereço de e-mail do destinatário principal.
+                attachment (str, optional): O caminho para o arquivo anexado, se houver.
+
         """
-        Envia o e-mail para os destinatários especificados.
-        args:
-            subject: str - Assunto do e-mail
-            body: str - Corpo do e-mail
-            to_email: str - E-mail do destinatário
-            cc_emails: str - E-mails de cópia separados por vírgula ou ponto e vírgula
-            file_path: str - Caminho para o arquivo a ser anexado
-        return:
-            SMTPResponse - Objeto com informações sobre o envio do e-mail
-            success: bool - Indica se o e-mail foi enviado com sucesso
-            subject: str - Assunto do e-mail
-            body: str - Corpo do e-mail
-            to_email: str - E-mail do destinatário
-            file_path: str - Caminho do arquivo anexado
-        """
-        email = Email(self.logger, self.login, subject, body, to_email, cc_emails, file_path)
+        email = Email(self.logger, self.login, subject, body, to_email, cc_emails, file_path, self.signature_path)
         try:
             # Envia o e-mail
-            self.logger.info(f"Enviando e-mail \"{subject}\" para: {email.recipients}")
+            self.logger.info(f"Enviando e-mail \"{subject}\"")
             self.server.sendmail(self.login, email.recipients, email.msg)
-            self.logger.info(f"E-mail enviado com sucesso para {email.recipients}")
+            self.logger.info(f"E-mail enviado com sucesso")
 
             # Salva o e-mail na caixa de saída
-            self.logger.info("Salvando e-mail na caixa de saída.")
-            self.imap.append('INBOX.Sent', '\\Seen', imaplib.Time2Internaldate(time.time()), email.msg.encode('utf8'))
-            self.logger.info("E-mail salvo na caixa de saída.")
+            sent_folder = self._find_sent_folder()
+            self.logger.info(f"Salvando e-mail em {sent_folder}")        
+            self.imap.append(sent_folder, '', imaplib.Time2Internaldate(time.time()), email.msg.encode('utf8'))
+            self.logger.info("E-mail salvo com sucesso")
             
             return SMTPResponse(True, email.from_email, email.subject, email.body, email.html_body, email.to_email, email.cc_emails, email.signature_path, email.file_path)
         
@@ -127,3 +133,31 @@ class EmailSender:
             self.logger.exception(error)
             return SMTPResponse(False, email.from_email, email.subject, email.body, email.html_body, email.to_email, email.cc_emails, email.signature_path, email.file_path, error, 500)
         
+    def _find_sent_folder(self):
+        """
+        Encontra a pasta de enviados no servidor IMAP.
+        """
+        # Lista de mapeamentos para provedores de e-mail comuns e suas pastas de enviados
+        email_folders = {
+            'gmail': '"[Gmail]/Sent Mail"',
+            'yahoo': 'Sent',
+            'outlook': '"[Outlook]/Sent"',
+            'hotmail': '"[Hotmail]/Sent"',
+            'aol': 'Sent',
+            'icloud': 'Sent Messages'
+        }
+        status, mailboxes = self.imap.list()
+        # Variável para armazenar a pasta de enviados
+        sent_folder = None
+        # Buscando pela pasta de enviados
+        for mailbox in mailboxes:
+            mailbox_name = mailbox.decode()
+            if 'sent' in mailbox_name.lower():
+                for provider, folder in email_folders.items():
+                    if provider in mailbox_name.lower():
+                        sent_folder = folder
+                        break
+                if not sent_folder:
+                    sent_folder = mailbox_name.split(' "." ')[-1]
+                break
+        return sent_folder
